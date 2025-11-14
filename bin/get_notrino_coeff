@@ -10,8 +10,8 @@ import os
 
 SPECIES = ['nue', 'nua', 'nux']
 COLOURS = ['red', 'blue', 'black']
-PERC_RNEU = 1.0
-TLIM = 0.05
+PERC_RNEU = 2.0
+TLIM = 0.1
 
 warnings.filterwarnings("ignore")
 parser = argparse.ArgumentParser()
@@ -110,10 +110,7 @@ for time in TIMES:
       B0_loc = ka_mean / ((rho * 1e-10) * \
                               (np.maximum(T, T[k_ns]) ** 2) * \
                               X[i_species])
-    B0_loc_avg = np.nansum(B0_loc[:k,...] * dV[:k,...] * rho[:k, ...]) / \
-                    np.nansum(dV[:k,...] * rho[:k, ...])
-    B0[i_species] += B0_loc_avg
-
+    
     if m.dim == 1:
       k_op_r = k_op[i_species]
     else:
@@ -125,26 +122,43 @@ for time in TIMES:
     B1_loc = k_mean / ((rho * 1.e-10) * (np.maximum(T, T[k_ns]) ** 2) * \
                               (Xn + Xp))
 
-    B1_loc_avg = np.nansum(B1_loc[:k,...] * dV[:k, ...] * rho[:k, ...]) / \
-                    np.nansum(dV[:k, ...] * rho[:k, ...])
+    # Masking weird values
+    mask = B0_loc > 1.0
+    if mask.any():
+      print('[UNPHYSICAL RESULTS] ABSORPTION/EMISSION:\tTime: %.2f' % time)
+      print('\tCorrecting %s' % species)
+    B0_loc[mask] = np.nanmin(B0_loc)
+    mask = B1_loc > 1.0
+    if mask.any():
+      if args.model == 1:
+        print('[UNPHYSICAL RESULTS] TRANSPORT:\tTime: %.2f' % time)
+        print('\tCorrecting %s' % species)
+      elif args.model == 2:
+        print('[UNPHYSICAL RESULTS] SCATTERING:\tTime: %.2f' % time)
+        print('\tCorrecting %s' % species)
+    B1_loc[mask] = np.nanmin(B1_loc)
+
+    # Computing the average
+    B0_loc_avg = np.nansum(B0_loc[:k_ns+1,...] * dV[:k_ns+1,...] * rho[:k_ns+1, ...]) / \
+                   np.nansum(dV[:k_ns+1,...] * rho[:k_ns+1, ...])
+    B1_loc_avg = np.nansum(B1_loc[:k_ns+1,...] * dV[:k_ns+1,...] * rho[:k_ns+1, ...]) / \
+                    np.nansum(dV[:k_ns+1,...] * rho[:k_ns+1, ...])
+
+    B0[i_species] += B0_loc_avg
     B1[i_species] += B1_loc_avg
        
     if (time == TIMES[0]):
       if m.dim > 1:
-        B0_loc = np.nansum(B0_loc[:k,...] * dV[:k,...] * rho[:k, ...], axis=0) / \
-                   np.nansum(dV[:k,...] * rho[:k, ...], axis=0)
-        B1_loc = np.nansum(B1_loc[:k,...] * dV[:k,...] * rho[:k, ...], axis=0) / \
-                    np.nansum(dV[:k,...] * rho[:k, ...], axis=0)
+        B0_loc = np.nansum(B0_loc[:k_ns+1,...] * dV[:k_ns+1,...] * rho[:k_ns+1, ...], axis=0) / \
+                    np.nansum(dV[:k_ns+1,...] * rho[:k_ns+1, ...], axis=0)
+        B1_loc = np.nansum(B1_loc[:k_ns+1,...] * dV[:k_ns+1,...] * rho[:k_ns+1, ...], axis=0) / \
+                    np.nansum(dV[:k_ns+1,...] * rho[:k_ns+1, ...], axis=0)
       ax.plot(r.value[:k_ns+1], B0_loc.value[:k_ns+1], color = COLOURS[i_species], ls='-')
       ax.plot(r.value[:k_ns+1], B1_loc.value[:k_ns+1], color = COLOURS[i_species], \
               ls='--')
-      ax.plot(r.value[k], B0_loc.value[k], color = COLOURS[i_species], \
-              marker='o')
-      ax.plot(r.value[k], B1_loc.value[k], color = COLOURS[i_species], \
-              marker='o')
 
 # Printing neutrino-spheres radii at the final time
-print('Neutrinosphere radius for nue: %.2e cm' % neu_sph['nue'].data[it])
+print('\nNeutrinosphere radius for nue: %.2e cm' % neu_sph['nue'].data[it])
 print('Neutrinosphere radius for nua: %.2e cm' % neu_sph['nua'].data[it])
 print('Neutrinosphere radius for nux: %.2e cm' % neu_sph['nux'].data[it])
 print('Neutrinosphere temperature: %.2e MeV' % T[k_neu['nue']].max())
