@@ -48,10 +48,6 @@ E_bin_sum = np.nansum(m.cell.E_nu() * m.cell.dE_nu())
 B0 = np.zeros(3)
 B1 = np.zeros(3)
 
-print('You will restart from file %s' % m.find_file_from_time(args.time))
-print('Radial average up to %.2f of neutrinosphere' % PERC_RNEU)
-print('Time average between %.3f s and %.3f s' % (args.time - TLIM, args.time))
-
 # Save the position of the neutirnospheres of the different flavours
 # for the remapping times
 k_neu = {
@@ -157,6 +153,9 @@ for time in TIMES:
       ax.plot(r.value[:k_ns+1], B1_loc.value[:k_ns+1], color = COLOURS[i_species], \
               ls='--')
 
+print('\nYou will restart from file %s' % m.find_file_from_time(args.time))
+print('Radial average up to %.2f of neutrinosphere' % PERC_RNEU)
+print('Time average between %.3f s and %.3f s' % (args.time - TLIM, args.time))
 # Printing neutrino-spheres radii at the final time
 print('\nNeutrinosphere radius for nue: %.2e cm' % neu_sph['nue'].data[it])
 print('Neutrinosphere radius for nua: %.2e cm' % neu_sph['nua'].data[it])
