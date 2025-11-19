@@ -74,13 +74,22 @@ for time in TIMES:
   X = [Xn, Xp, Ye]
 
   # Absorption/emission opacity
-  ka = m.neutrino_absorption_opacity(time)
+  try:
+    ka = m.neutrino_absorption_opacity(time)
+  except:
+    continue
   if args.model == 1:
     # Transport opacity
-    k_op = m.neutrino_transport_opacities(time)
+    try:
+      k_op = m.neutrino_transport_opacities(time)
+    except:
+      continue
   elif args.model == 2:
     # Scattering opacity
-    k_op = m.neutrino_scattering_opacities(time)
+    try:
+      k_op = m.neutrino_scattering_opacities(time)
+    except:
+      continue
   else:
     raise ValueError('Sorry, not a valid choice for NOTRINO model. It must be 1 or 2.')
 
@@ -100,11 +109,11 @@ for time in TIMES:
     if species == 'nux':
       # In this case, B0 is computed differently
       B0_loc = ka_mean / (np.sqrt(rho * 1.e-10) * \
-                              (np.maximum(T, T[k_ns]) ** 3) * \
+                              (np.maximum(T, T[..., k_ns, None]) ** 3) * \
                               X[i_species])
     else:
       B0_loc = ka_mean / ((rho * 1e-10) * \
-                              (np.maximum(T, T[k_ns]) ** 2) * \
+                              (np.maximum(T, T[..., k_ns, None]) ** 2) * \
                               X[i_species])
     
     if m.dim == 1:
@@ -115,7 +124,7 @@ for time in TIMES:
     k_mean = np.nansum(k_op_r * m.cell.E_nu()[None,:] * \
                           m.cell.dE_nu()[None,:], axis = -1) / E_bin_sum
       
-    B1_loc = k_mean / ((rho * 1.e-10) * (np.maximum(T, T[k_ns]) ** 2) * \
+    B1_loc = k_mean / ((rho * 1.e-10) * (np.maximum(T, T[..., k_ns, None]) ** 2) * \
                               (Xn + Xp))
 
     # Masking weird values
@@ -160,7 +169,7 @@ print('Time average between %.3f s and %.3f s' % (args.time - TLIM, args.time))
 print('\nNeutrinosphere radius for nue: %.2e cm' % neu_sph['nue'].data[it])
 print('Neutrinosphere radius for nua: %.2e cm' % neu_sph['nua'].data[it])
 print('Neutrinosphere radius for nux: %.2e cm' % neu_sph['nux'].data[it])
-print('Neutrinosphere temperature: %.2e MeV' % T[k_neu['nue']].max())
+print('Neutrinosphere temperature: %.2e MeV' % T[...,k_neu['nue']].mean())
 
 B0 /= TIMES.shape[0]
 B1 /= TIMES.shape[0]
@@ -180,14 +189,14 @@ print(' JANKA2001A_KAENUX_COEFF = %.15e,' % B0[2])
 print(' JANKA2001A_KTRNUE_COEFF = %.15e,' % B1[0])
 print(' JANKA2001A_KTRNUA_COEFF = %.15e,' % B1[1])
 print(' JANKA2001A_KTRNUX_COEFF = %.15e,' % B1[2])
-print(' JANKA2001A_TMIN =   %.14f     ,' % (T[k_neu['nue']].max() / 4.))
+print(' JANKA2001A_TMIN =   %.14f     ,' % T[...,k_neu['nue']].mean())
 print(' JANKA2001B_KAENUE_COEFF = %.15e,' % B0[0])
 print(' JANKA2001B_KAENUA_COEFF = %.15e,' % B0[1])
 print(' JANKA2001B_KAENUX_COEFF = %.15e,' % B0[2])
 print(' JANKA2001B_KSCNUE_COEFF = %.15e,' % B1[0])
 print(' JANKA2001B_KSCNUA_COEFF = %.15e,' % B1[1])
 print(' JANKA2001B_KSCNUX_COEFF = %.15e,' % B1[2])
-print(' JANKA2001B_TMIN =   %.14f     ,' % (T[k_neu['nue']].max() / 4.))
+print(' JANKA2001B_TMIN =   %.14f     ,' % T[...,k_neu['nue']].mean())
 print(' WGHMOD  =           2,')
 print(' WGH_TANH_TAU0   =  1.333333333333333     ,')
 print(' WGH_FD_DTAU     =   0.25000000000000     ,')
