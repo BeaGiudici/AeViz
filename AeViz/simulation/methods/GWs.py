@@ -75,7 +75,11 @@ def GW_Amplitudes(self, distance=None, tob_corrected=True,
         index = np.argmax((data[:, 2] - self.tob) >= -0.01)
     else:
         index = None
-    GWs = GW_strain(self.dim, column_change, data, index, n, distance)
+    if 'return_components' in kwargs and self.dim == 3:
+        GWs = GW_strain(self.dim, column_change, data, index, n, distance,
+                        kwargs['return_components'])
+    else:
+        GWs = GW_strain(self.dim, column_change, data, index, n, distance)
     if GWs is None:
         return None
     if self.dim > 2:
@@ -137,18 +141,14 @@ def hchar(self, tob_corrected=True, time_range=None, windowing='hanning',
                                    **kw)
     hchar = characteristic_strain(GW_strain, self.dim, time_range, windowing,
                                   distance, divide_by_frequency)
-    if self.dim > 2:
+    if self.dim == 3:
         if 'comp' in kwargs:
             if kwargs['comp'] == 'all':
                 pass
-            elif kwargs['comp'] == 'h+eq':
+            elif kwargs['comp'] in ['h+eq', 'hxeq', 'heq']:
                 return hchar[0]
-            elif kwargs['comp'] == 'h+pol':
+            elif kwargs['comp'] in ['h+pol', 'hxpol', 'hpol']:
                 return hchar[1]
-            elif kwargs['comp'] == 'hxeq':
-                return hchar[2]
-            elif kwargs['comp'] == 'hxpol':
-                return hchar[3]
             else:
                 raise TypeError("GW component not recognized")
     return hchar
@@ -238,12 +238,19 @@ def GWs_peak_frequencies(self, peak:Literal['bounce', 'highest']='bounce',
     return return_list
 
 @smooth
-def GWs_dE_dt(self, lower_refinement=False, tob_corrected=True):
+@subtract_tob
+def GWs_dE_dt(self, lower_refinement=False, tob_corrected=True, **kwargs):
     """
     Returns the energy carried away by the GWs in erg/s
     """
-    GWs = self.GW_Amplitudes(tob_corrected=tob_corrected,
+    if self.dim == 3:
+        GWs = self.GW_Amplitudes(tob_corrected=False,
+                                lower_refinement=lower_refinement,
+                                return_components=True)
+    else:
+        GWs = self.GW_Amplitudes(tob_corrected=False,
                                 lower_refinement=lower_refinement)
+    
     return GWs_energy(GWs, self.dim)
 
 @smooth
