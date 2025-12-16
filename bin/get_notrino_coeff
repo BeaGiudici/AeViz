@@ -10,7 +10,7 @@ import os
 
 SPECIES = ['nue', 'nua', 'nux']
 COLOURS = ['red', 'blue', 'black']
-PERC_RNEU = 2.0
+PERC_RNEU = 1.0
 TLIM = 0.1
 
 warnings.filterwarnings("ignore")
@@ -62,6 +62,7 @@ ax.set_yscale('log')
 ax.set_xscale('log')
 ax.set_xlabel('Radius [cm]')
 ax.set_ylabel(r'$B_{\nu}$')
+ax.set_title(args.sim_name)
 ax.text(0.1, 0.9, '%.3f s' % args.time, transform = ax.transAxes)
 
 for time in TIMES:
@@ -152,7 +153,7 @@ for time in TIMES:
     B0[i_species] += B0_loc_avg
     B1[i_species] += B1_loc_avg
        
-    if (time == TIMES[0]):
+    if (time == TIMES[-1]):
       if m.dim > 1:
         B0_loc = np.nansum(B0_loc[:k_ns+1,...] * dV[:k_ns+1,...] * rho[:k_ns+1, ...], axis=0) / \
                     np.nansum(dV[:k_ns+1,...] * rho[:k_ns+1, ...], axis=0)
@@ -165,6 +166,7 @@ for time in TIMES:
 print('\nYou will restart from file %s' % m.find_file_from_time(args.time))
 print('Radial average up to %.2f of neutrinosphere' % PERC_RNEU)
 print('Time average between %.3f s and %.3f s' % (args.time - TLIM, args.time))
+print('Averaged over %d outputs' % TIMES.shape[0])
 # Printing neutrino-spheres radii at the final time
 print('\nNeutrinosphere radius for nue: %.2e cm' % neu_sph['nue'].data[it])
 print('Neutrinosphere radius for nua: %.2e cm' % neu_sph['nua'].data[it])
