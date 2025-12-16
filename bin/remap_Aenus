@@ -1,0 +1,352 @@
+#!/usr/bin/env python
+
+import h5py
+import numpy as np
+import argparse
+from AeViz.simulation.simulation import Simulation
+import os
+
+def interpolate(nx, ny, nz, sim_grid, sim_value, prog_grid, prog_values, n0=0):
+  """Interpolate simulation grid values to progenitor grid."""
+  new_values = np.empty((nz, ny, nx))
+  new_values[:,:,:n0] = sim_value[:,:,:n0]
+  for iz in range(nz):
+    for iy in range(ny):
+      for ix in range(n0, nx):
+        for ip in range(prog_grid.shape[0]-1):
+          if (sim_grid[ix] >= prog_grid[ip]) and (sim_grid[ix] < prog_grid[ip+1]):
+            # Linear interpolation
+            x0 = prog_grid[ip]
+            x1 = prog_grid[ip+1]
+            y0 = prog_values[ip]
+            y1 = prog_values[ip+1]
+            slope = (y1 - y0) / (x1 - x0)
+            new_values[iz, iy, ix] = y0 + slope * (sim_grid[ix] - x0)
+            break
+  return new_values
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--sim-name', required=True, type=str, \
+                    help ='Name of the simulation')
+parser.add_argument('--sim-path', type=str, default=None, required=False,
+                    help="Path of the simulation.")
+parser.add_argument('--file', required=True, type=str, \
+            help='File name to be remapped (with .h5 extension , please)')
+'''
+parser.add_argument('--new-xmin', required=False, type=float, \
+                    help='New value for XMIN')
+parser.add_argument('--new-xmax', required=False, type=float, \
+                    help='New value for XMAX')
+parser.add_argument('--new-nx', required=False, type=int, \
+                    help='New value for number of points in x direction')
+parser.add_argument('--new-ymin', required=False, type=float, \
+                    help='New value for YMIN')
+parser.add_argument('--new-ymax', required=False, type=float, \
+                    help='New value for YMAX')
+parser.add_argument('--new-ny', required=False, type=int, \
+                    help='New value for number of points in y direction')  
+parser.add_argument('--new-zmin', required=False, type=float, \
+                    help='New value for ZMIN')
+parser.add_argument('--new-zmax', required=False, type=float, \
+                    help='New value for ZMAX') 
+parser.add_argument('--new-nz', required=False, type=int, \
+                    help='New value for number of points in z direction')
+'''
+parser.add_argument('--ncells', required=False, type=int, \
+                    help='Number of cells to add')
+parser.add_argument('--prog-location', required=True, type=str, \
+                    help='Path to the progenitor files')
+args = parser.parse_args()
+filename = args.file
+ncells = args.ncells
+
+# I know my chickens...
+if filename[-3:] != '.h5':
+  filename += '.h5'
+
+m = Simulation(args.sim_name, args.sim_path)
+simdir = m.path
+outpath = os.path.join(m.storage_path, 'remap_files')
+
+print(f'Files will be saved in {outpath}')
+
+if not os.path.isdir(outpath):
+  os.mkdir(outpath)
+
+print('Not remapping neutrino energies. Copying "grid.e.dat" file...')
+os.system(f'cp {os.path.join(simdir, 'grid', 'grid.e.dat')} {os.path.join(outpath, 'grid.e.dat')}')
+
+print('Not remapping y grid. Copying "grid.y.dat" file...')
+n, xl, x, xr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.y.dat'), unpack=True)
+ny = x.shape[0]
+os.system(f'cp {os.path.join(simdir, 'grid', 'grid.y.dat')} {os.path.join(outpath, 'grid.y.dat')}')
+
+print('Not remapping z grid. Copying "grid.z.dat" file...')
+n, xl, x, xr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.z.dat'), unpack=True)
+try:
+  nz = len(x)
+except:
+  nz = 1
+os.system(f'cp {os.path.join(simdir, 'grid', 'grid.z.dat')} {os.path.join(outpath, 'grid.z.dat')}')
+
+# Remap the grid
+print('Remapping the x grid...')
+n, xl, x, xr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.x.dat'), unpack=True)
+n0 = n.shape[0]
+alpha = (xr[-1] - xl[-1]) / (xr[-2] - xl[-2])
+for i in range(n0, n0 + ncells):
+  dx_new = (xr[i-1] - xl[i-1]) * alpha
+  xl = np.append(xl, xr[i-1])
+  xr = np.append(xr, xl[i] + dx_new)
+  x = np.append(x, 0.5 * (xl[i] + xr[i]))
+  n = np.append(n, i)
+
+nx = x.shape[0]
+
+np.savetxt(os.path.join(outpath, 'grid.x.dat'), np.array([n, xl, x, xr]).T, \
+           fmt=['%d', '%.12e', '%.12e', '%.12e'])
+
+# (M)HD remapping script
+f = h5py.File(os.path.join(simdir, 'outp-hdf', filename), 'r')
+fnew = h5py.File(os.path.join(outpath, filename), 'w')
+prog = np.genfromtxt(os.path.join(args.prog_location, 'star.dat'), \
+                      unpack=True)
+star_n, star_xl, star_xc, star_xr = np.genfromtxt(os.path.join(args.prog_location, \
+                                       'initial_model.x.dat'), unpack=True)
+
+# General grid, parameters and indices that does not need fancy remapping
+grid_mask = (star_xc >= x[n0]) & (star_xc <= x[-1])
+for g in f.keys():
+  print(f'Remapping {g}...')
+  fnew.require_group(g)
+  if g in ['Indices', 'Parameters']:
+    for d in f[g].keys():
+      fnew[g].create_dataset(d, data=f[g][d][...])
+  
+  # Grid
+  if g in ['X', 'Y', 'Z']:
+    _, l, c, r = np.genfromtxt(os.path.join(outpath, f'grid.{g.lower()}.dat'), unpack=True)
+    fnew[g].create_dataset('znl', data=l)
+    fnew[g].create_dataset('znr', data=r)
+    fnew[g].create_dataset('znc', data=c)
+    fnew[g].create_dataset(f'ipl{g.lower()}', data=f[g][f'ipl{g.lower()}'][...])
+    fnew[g].create_dataset(f'itl{g.lower()}', data=f[g][f'itl{g.lower()}'][...])
+    fnew[g].create_dataset(f'ipr{g.lower()}', data=f[g][f'ipr{g.lower()}'][...])
+    fnew[g].create_dataset(f'itr{g.lower()}', data=f[g][f'itr{g.lower()}'][...])
+
+  # If full neutrino is used
+  if g == 'egrid':
+    for d in f['egrid'].keys():
+      fnew['egrid'].create_dataset(d, data=f['egrid'][d][...])
+
+  if g == 'neutrino':
+    en = np.concatenate((f[g]['e'][...], np.zeros((nz, ny, ncells, \
+          f[g]['e'].shape[3], f[g]['e'].shape[4], f[g]['e'].shape[5]))), axis=2)
+    fnew[g].create_dataset('e', data=en)
+    oen = np.concatenate((f[g]['oe'][...], np.zeros((nz, ny, ncells, \
+          f[g]['oe'].shape[3], f[g]['oe'].shape[4], f[g]['oe'].shape[5]))), axis=2)
+    fnew[g].create_dataset('oe', data=oen)
+  
+  if g == 'neutrinogrey':
+    ene = np.concatenate((f[g]['egrey'][...], np.zeros((nz, ny, ncells, \
+                    f[g]['egrey'].shape[3], f[g]['egrey'].shape[4]))), axis=2)
+    fnew[g].create_dataset('egrey', data=ene)
+
+  # Gravitational waves
+  if g == 'GW':
+    fnew[g].create_dataset('Q20_mom', data=f[g]['Q20_mom'][...])
+    fnew[g].create_dataset('Q20_rho', data=f[g]['Q20_rho'][...])
+    Q20_mom_r = np.append(f[g]['Q20_mom_r'][...], np.zeros(ncells))
+    Q20_rho_r = np.append(f[g]['Q20_rho_r'][...], np.zeros(ncells))
+    fnew[g].create_dataset('Q20_mom_r', data=Q20_mom_r)
+    fnew[g].create_dataset('Q20_rho_r', data=Q20_rho_r)
+
+  # Magnetic field
+  if g == 'divb':
+    divb = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells))), axis=2)
+    fnew[g].create_dataset('data', data=divb)
+
+  if g == 'mag_CT':
+    mag_CT = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells, \
+                                              f[g]['data'].shape[3]))), axis=2)
+    fnew[g].create_dataset('data', data=mag_CT)
+
+  if g == 'mag_vol':
+    mag_CT = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells, \
+                                              f[g]['data'].shape[3]))), axis=2)
+    fnew[g].create_dataset('data', data=mag_CT)
+
+  # Gravitational potential
+  if g == 'gravpot':
+    gravpot = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells))), axis=2)
+
+  # Hydrodynamics variables
+
+
+  # Thermodynamics and hydrodynamics remapping
+  if g == 'thd':
+    fnew[g].create_dataset('variables', data=f[g]['variables'][...])
+    fnew[g].create_dataset('thddim', data=f[g]['thddim'][...])
+
+    # Let's go one-by-one for the remapping
+    data_new = np.empty((nz, ny, nx, f[g]['thddim'][()][0]))
+
+    # Density
+    if 'i_dens' in f[g].keys():
+      i = f[g]['i_dens'][()][0]
+      fnew[g].create_dataset('i_dens', data=i)
+      rho = f[g]['data'][:, :, :, i - 1]
+      data_new[..., i - 1] = interpolate(nx, ny, nz, x, rho, star_xc, prog[0], n0=n0)
+    
+    # Pressure
+    if 'i_pgas' in f[g].keys():
+      i = f[g]['i_pgas'][()][0]
+      fnew[g].create_dataset('i_pgas', data=i)
+      pgas = f[g]['data'][..., i - 1]
+      data_new[..., i - 1] = interpolate(nx, ny, nz, x, pgas, star_xc, prog[3], n0=n0)
+    
+    # Temperature
+    if 'i_tmpr' in f[g].keys():
+      i = f[g]['i_tmpr'][()][0]
+      fnew[g].create_dataset('i_tmpr', data=i)
+      tmpr = f[g]['data'][..., i-1]
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, tmpr, star_xc, prog[1], n0=n0)
+
+    # Internal energy
+    if 'i_eint' in f[g].keys():
+      i = f[g]['i_eint'][()][0]
+      fnew[g].create_dataset('i_eint', data=i)
+      eint = f[g]['data'][..., i-1]
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, eint, star_xc, prog[2], n0=n0)
+    
+    # Radial velocity
+    if 'i_velx' in f[g].keys():
+      i = f[g]['i_velx'][()][0]
+      fnew[g].create_dataset('i_velx', data=i)
+      velx = f[g]['data'][..., i-1]
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, velx, star_xc, prog[7], n0=n0)
+      
+    # Theta velocity
+    if 'i_vely' in f[g].keys():
+      i = f[g]['i_vely'][()][0]
+      fnew[g].create_dataset('i_vely', data=i)
+      vely = f[g]['data'][..., i-1]
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, velx, star_xc, prog[8] * star_xc, n0=n0)
+
+    # Phi velocity
+    if 'i_velz' in f[g].keys():
+      i = f[g]['i_velz'][()][0]
+      fnew[g].create_dataset('i_velz', data=i)
+      velz = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((velz, np.zeros((nz, ny, ncells))), axis=2)
+      
+    # Lorentz factor
+    if 'i_Lrtz' in f[g].keys():
+      i = f[g]['i_Lrtz'][()][0]
+      fnew[g].create_dataset('i_Lrtz', data=i)
+      Lrtz = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((Lrtz, np.ones((nz, ny, ncells))), axis=2)
+
+    # Entropy
+    if 'i_entr' in f[g].keys():
+      i = f[g]['i_entr'][()][0]
+      fnew[g].create_dataset('i_entr', data=i)
+      entr = f[g]['data'][..., i-1]
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, entr, star_xc, prog[4], n0=n0)
+    
+    # Enthalpy
+    if 'i_enth' in f[g].keys():
+      i = f[g]['i_enth'][()][0]
+      fnew[g].create_dataset('i_enth', data=i)
+      enth = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((enth, np.ones((nz, ny, ncells))), axis=2)
+
+    # EOS gamma
+    if 'i_gamm' in f[g].keys():
+      i = f[g]['i_gamm'][()][0]
+      fnew[g].create_dataset('i_gamm', data=i)
+      gamm = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((gamm, np.ones((nz, ny, ncells)) * 4./3.), axis=2)
+
+    # eoserr
+    if 'i_eoserr' in f[g].keys():
+      i = f[g]['i_eoserr'][()][0]
+      fnew[g].create_dataset('i_eoserr', data=i)
+      eoserr = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((eoserr, np.zeros((nz, ny, ncells))), axis=2)
+
+    # eoscls
+    if 'i_eoscls' in f[g].keys():
+      i = f[g]['i_eoscls'][()][0]
+      fnew[g].create_dataset('i_eoscls', data=i)
+      eoscls = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((eoscls, np.zeros((nz, ny, ncells))), axis=2)
+
+    # Chemical potential
+    if 'i_cpot' in f[g].keys():
+      i = f[g]['i_cpot'][()][0]
+      fnew[g].create_dataset('i_cpot', data=i)
+      cpot = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((cpot, np.zeros((nz, ny, ncells))), axis=2)
+
+    for ic in range(5,8):
+      if 'i_cpot-%03d' % ic in f[g].keys():
+        i = f[g]['i_cpot-%03d' % ic][()][0]
+        fnew[g].create_dataset('i_cpot-%03d' % ic, data=i)
+        cpot = f[g]['data'][..., i-1]
+        data_new[..., i-1] = np.concatenate((cpot, np.zeros((nz, ny, ncells))), axis=2)
+
+    # comp
+    if 'i_comp' in f[g].keys():
+      i = f[g]['i_comp'][()][0]
+      fnew[g].create_dataset('i_comp', data=i)
+      comp = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((comp, np.zeros((nz, ny, ncells))), axis=2)
+
+    for ic in range(0,5):
+      if 'i_comp-%03d' % ic in f[g].keys():
+        i = f[g]['i_comp-%03d' % ic][()][0]
+        fnew[g].create_dataset('i_comp-%03d' % ic, data=i)
+        comp = f[g]['data'][..., i-1]
+        data_new[..., i-1] = np.concatenate((comp, np.zeros((nz, ny, ncells))), axis=2)
+
+    # csnd
+    if 'i_csnd' in f[g].keys():
+      i = f[g]['i_csnd'][()][0]
+      fnew[g].create_dataset('i_csnd', data=i)
+      csnd = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((csnd, np.zeros((nz, ny, ncells))), axis=2)
+
+    # delp
+    if 'i_delp' in f[g].keys():
+      i = f[g]['i_delp'][()][0]
+      fnew[g].create_dataset('i_delp', data=i)
+      delp = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((delp, np.zeros((nz,ny, ncells))), axis=2)
+
+    # Moments
+    if 'i_smomx' in f[g].keys():
+      i = f[g]['i_smomx'][()][0]
+      fnew[g].create_dataset('i_smomx', data=i)
+      smomx = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((smomx, np.zeros((nz, ny, ncells))), axis=2)
+    if 'i_smomy' in f[g].keys():
+      i = f[g]['i_smomy'][()][0]
+      fnew[g].create_dataset('i_smomy', data=i)
+      smomy = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((smomy, np.zeros((nz, ny, ncells))), axis=2)
+    if 'i_smomz' in f[g].keys():
+      i = f[g]['i_smomz'][()][0]
+      fnew[g].create_dataset('i_smomz', data=i)
+      smomz = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((smomz, np.zeros((nz, ny, ncells))), axis=2)
+
+    # heat
+    if 'i_heat' in f[g].keys():
+      i = f[g]['i_heat'][()][0]
+      fnew[g].create_dataset('i_heat', data=i)
+      heat = f[g]['data'][..., i-1]
+      data_new[..., i-1] = np.concatenate((heat, np.zeros((nz, ny, ncells))), axis=2)
+    
+    fnew[g].create_dataset('data', data=data_new)
+    
