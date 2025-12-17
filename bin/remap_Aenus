@@ -1,15 +1,35 @@
 #!/usr/bin/env python
 
+########################################################################
+#
+# remap_Aenus
+# Script to remap Aenus/ALCAR simulation files to a new grid
+# with more cells in the radial direction.
+# In the future it would be nice to have a more general remapping
+# script, but for now this is enough.
+#
+# I know what you are thinking: why didn't you use the built-in 
+# AeViz structure for the data? Because I have to recreate a new .h5
+# file with the exact same structure as the original one, and it is
+# way easier to do it this way (that's what I thought...).
+#
+# Author: Beatrice Giudici (beatrice.giudici@uv.es)
+#
+########################################################################
+
+
 import h5py
 import numpy as np
 import argparse
 from AeViz.simulation.simulation import Simulation
 import os
+import f90nml
 
-def interpolate(nx, ny, nz, sim_grid, sim_value, prog_grid, prog_values, n0=0):
+def interpolate(nx, ny, nz, sim_grid, prog_grid, prog_values, sim_value=None, n0=0):
   """Interpolate simulation grid values to progenitor grid."""
   new_values = np.empty((nz, ny, nx))
-  new_values[:,:,:n0] = sim_value[:,:,:n0]
+  if sim_value is not None:
+    new_values[:,:,:n0] = sim_value[:,:,:n0]
   for iz in range(nz):
     for iy in range(ny):
       for ix in range(n0, nx):
@@ -77,14 +97,14 @@ print('Not remapping neutrino energies. Copying "grid.e.dat" file...')
 os.system(f'cp {os.path.join(simdir, 'grid', 'grid.e.dat')} {os.path.join(outpath, 'grid.e.dat')}')
 
 print('Not remapping y grid. Copying "grid.y.dat" file...')
-n, xl, x, xr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.y.dat'), unpack=True)
-ny = x.shape[0]
+n, yl, y, yr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.y.dat'), unpack=True)
+ny = y.shape[0]
 os.system(f'cp {os.path.join(simdir, 'grid', 'grid.y.dat')} {os.path.join(outpath, 'grid.y.dat')}')
 
 print('Not remapping z grid. Copying "grid.z.dat" file...')
-n, xl, x, xr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.z.dat'), unpack=True)
+n, zl, z, zr = np.genfromtxt(os.path.join(simdir, 'grid', 'grid.z.dat'), unpack=True)
 try:
-  nz = len(x)
+  nz = len(z)
 except:
   nz = 1
 os.system(f'cp {os.path.join(simdir, 'grid', 'grid.z.dat')} {os.path.join(outpath, 'grid.z.dat')}')
@@ -116,6 +136,48 @@ star_n, star_xl, star_xc, star_xr = np.genfromtxt(os.path.join(args.prog_locatio
 
 # General grid, parameters and indices that does not need fancy remapping
 grid_mask = (star_xc >= x[n0]) & (star_xc <= x[-1])
+
+# If magnetic field is needed
+if 'mag_CT' in f.keys():
+  print('Intorpolating magnetic field...')
+  # Compute the vector potential in the progenitor grid
+  Bpol = prog[10]
+  Btor = prog[9]
+  fr = 0.5 * Bpol * star_xc
+  fr_interp_m = interpolate(nx, ny, nz, xl, star_xl, fr, n0=0)
+  fr_interp_p = interpolate(nx, ny, nz, xr, star_xr, fr, n0=0)
+  Bz = interpolate(nx, ny, nz, x, star_xc, Btor, n0=0)
+
+  # Face centered grid points in theta and phi directions
+  Bz_CT = np.zeros_like(Bz)
+  Bz_CT[1:-1, :, :] = 0.5 * (Bz[1:-1, :, :] + Bz[:-2, :, :])
+  if nz > 1:
+    Bz_CT[0, :, :] = Bz_CT[1, :, :]
+    Bz_CT[-1, :, :] = Bz_CT[-2, :, :]
+
+  # Face centered magnetic field components from vector potential
+  A1 = np.sin(yr[None,:,None]) * fr_interp_p * np.sin(yr[None,:,None])
+  A2 = np.sin(yl[None,:,None]) * fr_interp_p * np.sin(yl[None,:,None])
+  Bx_CT = (1. / (xr[None, None, :] * np.sin(y[None,:,None]))) * \
+    ( (A1 - A2) / (yr[None,:,None] - yl[None,:,None]))
+  A1 = fr_interp_p * np.sin(yr[None,:,None]) * xr[None, None, :]
+  A2 = fr_interp_m * np.sin(yr[None,:,None]) * xl[None, None, :]
+  By_CT = (-1. / x[None, None, :]) * ( (A1 - A2) / \
+                                  (xr[None, None, :] - xl[None, None, :]) )
+
+  # Cell centered magnetic field components
+  By = np.zeros_like(By_CT)
+  Bx = np.zeros_like(Bx_CT)
+  By[:, 1:-1, :] = 0.5 * (By_CT[:, 1:-1, :] + By_CT[:, :-2, :])
+  By[:, 0,  :] = By[:, 1,  :]
+  By[:, -1, :] = By[:, -2, :]
+  Bx[:, :, 1:-1] = 0.5 * (Bx_CT[:, :, 1:-1] + Bx_CT[:, :, :-2])
+  Bx[:, :, 0] = Bx[:, :, 1]
+  Bx[:, :, -1] = Bx[:, :, -2]
+
+# Get parfile
+parfile = f90nml.read(os.path.join(simdir, 'pars', 'start.pars'))
+
 for g in f.keys():
   print(f'Remapping {g}...')
   fnew.require_group(g)
@@ -163,27 +225,71 @@ for g in f.keys():
 
   # Magnetic field
   if g == 'divb':
+    # Divergence-free condition: divb always = 0 in the new cells
     divb = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells))), axis=2)
     fnew[g].create_dataset('data', data=divb)
 
   if g == 'mag_CT':
-    mag_CT = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells, \
-                                              f[g]['data'].shape[3]))), axis=2)
-    fnew[g].create_dataset('data', data=mag_CT)
+    #print('WARNING! Please recheck the computations, I might have made mistakes')
+    mag_CT_new = np.zeros((nz, ny, nx, 3))
+    mag_CT_new[:,:, :n0, 0] = f[g]['data'][:, :, :, 0]
+    mag_CT_new[:,:, :n0, 1] = f[g]['data'][:, :, :, 1]
+    mag_CT_new[:,:, :n0, 2] = f[g]['data'][:, :, :, 2]
+    mag_CT_new[:, :, n0:, 0] = Bx_CT[:, :, n0:]
+    mag_CT_new[:, :, n0:, 1] = By_CT[:, :, n0:]
+    mag_CT_new[:, :, n0:, 2] = Bz_CT[:, :, n0:]
+    fnew[g].create_dataset('data', data=mag_CT_new)
 
   if g == 'mag_vol':
-    mag_CT = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells, \
-                                              f[g]['data'].shape[3]))), axis=2)
-    fnew[g].create_dataset('data', data=mag_CT)
+    #print('WARNING! Please recheck the computations, I might have made mistakes')
+    mag_vol_new = np.zeros((nz, ny, nx, 3))
+    mag_vol_new[:,:, :n0, 0] = f[g]['data'][:, :, :, 0]
+    mag_vol_new[:,:, :n0, 1] = f[g]['data'][:, :, :, 1]
+    mag_vol_new[:,:, :n0, 2] = f[g]['data'][:, :, :, 2]
+    mag_vol_new[:, :, n0:, 0] = Bx[:, :, n0:]
+    mag_vol_new[:, :, n0:, 1] = By[:, :, n0:]
+    mag_vol_new[:, :, n0:, 2] = Bz[:, :, n0:]
+    fnew[g].create_dataset('data', data=mag_vol_new)
 
   # Gravitational potential
   if g == 'gravpot':
     gravpot = np.concatenate((f[g]['data'][...], np.zeros((nz, ny, ncells))), axis=2)
 
   # Hydrodynamics variables
+  if g == 'hydro':
+    hd = f[g]['data'][...]
+    hd_new = np.zeros((nz, ny, nx, hd.shape[3]))
+    hd_new[:, :, :n0, :] = hd[:, :, :n0, :]
+    if 'I_RH' in parfile["IINDICES"] and parfile["IINDICES"]["I_RH"] > -1:
+      rho = hd[:, :, :, parfile["IINDICES"]["I_RH"] - 1]
+      hd_new[:, :, :, parfile["IINDICES"]["I_RH"] - 1] = \
+          interpolate(nx, ny, nz, x, star_xc, prog[0], sim_value=rho, n0=n0)
+    if 'I_EN' in parfile["IINDICES"] and parfile["IINDICES"]["I_EN"] > -1:
+      eint = hd[:, :, :, parfile["IINDICES"]["I_EN"] - 1]
+      hd_new[:, :, :, parfile["IINDICES"]["I_EN"] - 1] = \
+          interpolate(nx, ny, nz, x, star_xc, prog[4], sim_value=eint, n0=n0)
+    if 'I_VX' in parfile["IINDICES"] and parfile["IINDICES"]["I_VX"] > -1:
+      velx = hd[:, :, :, parfile["IINDICES"]["I_VX"] - 1]
+      hd_new[:, :, :, parfile["IINDICES"]["I_VX"] - 1] = \
+          interpolate(nx, ny, nz, x, star_xc, prog[7] * prog[0], sim_value=velx, n0=n0)
+    if 'I_VY' in parfile["IINDICES"] and parfile["IINDICES"]["I_VY"] > -1:
+      vely = hd[:, :, :, parfile["IINDICES"]["I_VY"] - 1]
+      hd_new[:, :, :, parfile["IINDICES"]["I_VY"] - 1] = \
+          interpolate(nx, ny, nz, x, star_xc, prog[8] * star_xc * prog[0], \
+                      sim_value=vely, n0=n0)
+    if 'I_VZ' in parfile["IINDICES"] and parfile["IINDICES"]["I_VZ"] > -1:
+      velz = hd[:, :, :, parfile["IINDICES"]["I_VZ"] - 1]
+      hd_new[:, :, :, parfile["IINDICES"]["I_VZ"] - 1] = \
+          np.concatenate((velz, np.zeros((nz, ny, ncells))), axis=2)
+    if 'I_YE' in parfile["IINDICES"] and parfile["IINDICES"]["I_YE"] > -1:
+      ye = hd[:, :, :, parfile["IINDICES"]["I_YE"] - 1]
+      hd_new[:, :, :, parfile["IINDICES"]["I_YE"] - 1] = \
+          interpolate(nx, ny, nz, x, star_xc, prog[2], sim_value=ye, n0=n0)
+
+    fnew[g].create_dataset('data', data=hd_new)
 
 
-  # Thermodynamics and hydrodynamics remapping
+  # Thermodynamics remapping
   if g == 'thd':
     fnew[g].create_dataset('variables', data=f[g]['variables'][...])
     fnew[g].create_dataset('thddim', data=f[g]['thddim'][...])
@@ -191,47 +297,52 @@ for g in f.keys():
     # Let's go one-by-one for the remapping
     data_new = np.empty((nz, ny, nx, f[g]['thddim'][()][0]))
 
-    # Density
+    # DENS
     if 'i_dens' in f[g].keys():
       i = f[g]['i_dens'][()][0]
       fnew[g].create_dataset('i_dens', data=i)
-      rho = f[g]['data'][:, :, :, i - 1]
-      data_new[..., i - 1] = interpolate(nx, ny, nz, x, rho, star_xc, prog[0], n0=n0)
+      dens = f[g]['data'][:, :, :, i - 1]
+      data_new[..., i-1] = np.concatenate((dens, np.ones((nz, ny, ncells))), axis=2)
     
     # Pressure
     if 'i_pgas' in f[g].keys():
       i = f[g]['i_pgas'][()][0]
       fnew[g].create_dataset('i_pgas', data=i)
       pgas = f[g]['data'][..., i - 1]
-      data_new[..., i - 1] = interpolate(nx, ny, nz, x, pgas, star_xc, prog[3], n0=n0)
+      data_new[..., i - 1] = interpolate(nx, ny, nz, x, star_xc, prog[3], \
+                                         sim_value=pgas, n0=n0)
     
     # Temperature
     if 'i_tmpr' in f[g].keys():
       i = f[g]['i_tmpr'][()][0]
       fnew[g].create_dataset('i_tmpr', data=i)
       tmpr = f[g]['data'][..., i-1]
-      data_new[..., i-1] = interpolate(nx, ny, nz, x, tmpr, star_xc, prog[1], n0=n0)
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, star_xc, prog[1], \
+                                       sim_value=tmpr, n0=n0)
 
     # Internal energy
     if 'i_eint' in f[g].keys():
       i = f[g]['i_eint'][()][0]
       fnew[g].create_dataset('i_eint', data=i)
       eint = f[g]['data'][..., i-1]
-      data_new[..., i-1] = interpolate(nx, ny, nz, x, eint, star_xc, prog[2], n0=n0)
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, star_xc, prog[2], \
+                                       sim_value=eint, n0=n0)
     
     # Radial velocity
     if 'i_velx' in f[g].keys():
       i = f[g]['i_velx'][()][0]
       fnew[g].create_dataset('i_velx', data=i)
       velx = f[g]['data'][..., i-1]
-      data_new[..., i-1] = interpolate(nx, ny, nz, x, velx, star_xc, prog[7], n0=n0)
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, star_xc, prog[7], \
+                                       sim_value=velx, n0=n0)
       
     # Theta velocity
     if 'i_vely' in f[g].keys():
       i = f[g]['i_vely'][()][0]
       fnew[g].create_dataset('i_vely', data=i)
       vely = f[g]['data'][..., i-1]
-      data_new[..., i-1] = interpolate(nx, ny, nz, x, velx, star_xc, prog[8] * star_xc, n0=n0)
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, star_xc, \
+                                      prog[8] * star_xc, sim_value=vely, n0=n0)
 
     # Phi velocity
     if 'i_velz' in f[g].keys():
@@ -252,7 +363,8 @@ for g in f.keys():
       i = f[g]['i_entr'][()][0]
       fnew[g].create_dataset('i_entr', data=i)
       entr = f[g]['data'][..., i-1]
-      data_new[..., i-1] = interpolate(nx, ny, nz, x, entr, star_xc, prog[4], n0=n0)
+      data_new[..., i-1] = interpolate(nx, ny, nz, x, star_xc, prog[4], \
+                                       sim_value=entr, n0=n0)
     
     # Enthalpy
     if 'i_enth' in f[g].keys():
@@ -308,9 +420,13 @@ for g in f.keys():
         i = f[g]['i_comp-%03d' % ic][()][0]
         fnew[g].create_dataset('i_comp-%03d' % ic, data=i)
         comp = f[g]['data'][..., i-1]
-        data_new[..., i-1] = np.concatenate((comp, np.zeros((nz, ny, ncells))), axis=2)
+        if ic < 4:
+          data_new[..., i-1] = np.concatenate((comp, np.zeros((nz, ny, ncells))), axis=2)
+        else:
+          data_new[..., i-1] = interpolate(nx, ny, nz, x, star_xc, prog[6], \
+                                       sim_value=comp, n0=n0)
 
-    # csnd
+    # Sound speed
     if 'i_csnd' in f[g].keys():
       i = f[g]['i_csnd'][()][0]
       fnew[g].create_dataset('i_csnd', data=i)
